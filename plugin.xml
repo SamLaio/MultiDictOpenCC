@@ -2,7 +2,7 @@
 <plugin>
   <name>MultiDictOpenCC</name>
   <type>edit</type>
-  <description>進階管理 (多選/排序/編輯/圖示化)</description>
+  <description>字典檔的方式替換epub中的簡繁體文字</description>
   <version>4.5</version>
   <author>Sam</author>
   <engine>python3.4</engine>

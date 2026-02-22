@@ -1,7 +1,7 @@
 {
-    "STCharacters.txt": false,
-    "STPhrases.txt": false,
-    "TSCharacters.txt": true,
-    "TSPhrases.txt": true,
-    "TWPhrases.txt": false
+    "STCharacters.txt": true,
+    "STPhrases.txt": true,
+    "TSCharacters.txt": false,
+    "TSPhrases.txt": false,
+    "TWPhrases.txt": true
 }
