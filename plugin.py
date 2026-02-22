@@ -23,7 +23,7 @@ except ImportError:
 class MultiDictManager:
     def __init__(self, dict_dir):
         self.root = tk.Tk()
-        self.root.title("MultiDictOpenCC 獨立運行版 (含記憶功能)")
+        self.root.title("MultiDictOpenCC")
         self.root.geometry("850x750") 
         
         self.dict_dir = dict_dir
@@ -37,7 +37,7 @@ class MultiDictManager:
         self.saved_prefs = self.load_prefs()
 
         # --- 左側：控制區 ---
-        left_frame = tk.LabelFrame(self.root, text="1. 字典管理與排序")
+        left_frame = tk.LabelFrame(self.root, text="字典管理與排序")
         left_frame.pack(side="left", fill="y", padx=10, pady=5)
 
         self.listbox = tk.Listbox(left_frame, width=35, height=10, selectbackground="#0078d7")
