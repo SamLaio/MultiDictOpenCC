@@ -1,22 +1,30 @@
 import os
 import sys
+import json  # 用於儲存勾選狀態
 import tkinter as tk
 from tkinter import messagebox, scrolledtext
 
+# --- 核心：環境獨立化路徑設定 ---
+plugin_dir = os.path.dirname(os.path.realpath(__file__))
+if plugin_dir not in sys.path:
+    sys.path.insert(0, plugin_dir)
+
+# 設定檔與字典路徑
+CONFIG_FILE = os.path.join(plugin_dir, "config.json")
+DICT_DIR = os.path.join(plugin_dir, "dictionary")
+
 try:
+    from bs4 import BeautifulSoup
     from opencc import OpenCC
-    from sigil_bs4 import BeautifulSoup
 except ImportError:
-    print("錯誤：找不到 opencc 或 beautifulsoup4 模組。")
+    print("錯誤：在外掛目錄中找不到 'bs4' 或 'opencc' 資料夾。")
     sys.exit(1)
 
 class MultiDictManager:
     def __init__(self, dict_dir):
         self.root = tk.Tk()
-        self.root.title("MultiDictOpenCC 管理面板")
-        
-        # 縮小預設高度，確保在多數螢幕都能完整顯示
-        self.root.geometry("850x700") 
+        self.root.title("MultiDictOpenCC 獨立運行版 (含記憶功能)")
+        self.root.geometry("850x750") 
         
         self.dict_dir = dict_dir
         self.dict_contents = {} 
@@ -25,32 +33,33 @@ class MultiDictManager:
         self.current_file = None
         self.success = False
 
-        # --- 左側：控制區域 (按鈕放在這裡最安全) ---
-        left_frame = tk.LabelFrame(self.root, text="1. 字典選擇與排序")
+        # 讀取上次儲存的勾選狀態
+        self.saved_prefs = self.load_prefs()
+
+        # --- 左側：控制區 ---
+        left_frame = tk.LabelFrame(self.root, text="1. 字典管理與排序")
         left_frame.pack(side="left", fill="y", padx=10, pady=5)
 
-        self.listbox = tk.Listbox(left_frame, width=35, height=10)
+        self.listbox = tk.Listbox(left_frame, width=35, height=10, selectbackground="#0078d7")
         self.listbox.pack(padx=5, pady=5)
         self.listbox.bind('<<ListboxSelect>>', self.on_select_file)
 
-        # 排序與選取按鈕
-        btn_frame = tk.Frame(left_frame)
-        btn_frame.pack(fill="x", padx=5)
-        tk.Button(btn_frame, text="上移", command=self.move_up).pack(side="left", expand=True, fill="x")
-        tk.Button(btn_frame, text="下移", command=self.move_down).pack(side="left", expand=True, fill="x")
-        
-        sel_frame = tk.Frame(left_frame)
-        sel_frame.pack(fill="x", padx=5, pady=2)
-        tk.Button(sel_frame, text="全選", command=self.select_all).pack(side="left", expand=True, fill="x")
-        tk.Button(sel_frame, text="全不選", command=self.deselect_all).pack(side="left", expand=True, fill="x")
+        btn_sort_frame = tk.Frame(left_frame)
+        btn_sort_frame.pack(fill="x", padx=5)
+        tk.Button(btn_sort_frame, text="▲ 上移", command=self.move_up).pack(side="left", expand=True, fill="x")
+        tk.Button(btn_sort_frame, text="▼ 下移", command=self.move_down).pack(side="left", expand=True, fill="x")
 
-        # --- 關鍵：確定執行按鈕放在左側中間，保證看得到 ---
-        self.btn_run = tk.Button(left_frame, text="★ 開始執行轉換 ★", 
+        btn_sel_frame = tk.Frame(left_frame)
+        btn_sel_frame.pack(fill="x", padx=5, pady=5)
+        tk.Button(btn_sel_frame, text="☑ 全選", command=self.select_all).pack(side="left", expand=True, fill="x")
+        tk.Button(btn_sel_frame, text="☐ 全不選", command=self.deselect_all).pack(side="left", expand=True, fill="x")
+
+        self.btn_run = tk.Button(left_frame, text="★ 執行轉換 ★", 
                                  command=self.on_run, bg="#28a745", fg="white", 
                                  font=("Arial", 12, "bold"), pady=10)
-        self.btn_run.pack(fill="x", padx=5, pady=15)
+        self.btn_run.pack(fill="x", padx=5, pady=10)
 
-        # 勾選區域帶捲軸
+        # 帶捲軸的勾選清單
         canvas_frame = tk.Frame(left_frame)
         canvas_frame.pack(fill="both", expand=True)
         self.canvas = tk.Canvas(canvas_frame, width=220)
@@ -64,23 +73,45 @@ class MultiDictManager:
 
         self.refresh_file_list()
 
-        # --- 右側：編輯區域 ---
+        # --- 右側：編輯區 ---
         right_frame = tk.Frame(self.root)
         right_frame.pack(side="right", fill="both", expand=True, padx=10, pady=5)
-        self.edit_label = tk.Label(right_frame, text="編輯內容:")
+        self.edit_label = tk.Label(right_frame, text="編輯內容 (簡體[Tab]繁體):")
         self.edit_label.pack(anchor="w")
-        self.text_area = scrolledtext.ScrolledText(right_frame, height=35)
+        self.text_area = scrolledtext.ScrolledText(right_frame, height=40)
         self.text_area.pack(fill="both", expand=True, pady=5)
 
+    def load_prefs(self):
+        """讀取 config.json 中的勾選紀錄"""
+        if os.path.exists(CONFIG_FILE):
+            try:
+                with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
+                    return json.load(f)
+            except:
+                return {}
+        return {}
+
+    def save_prefs(self):
+        """將當前勾選狀態存入 config.json"""
+        prefs = {f: var.get() for f, var in self.dict_enabled.items()}
+        try:
+            with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
+                json.dump(prefs, f, ensure_ascii=False, indent=4)
+        except:
+            pass
+
     def refresh_file_list(self):
-        # 讀取 dictionary 目錄下的 txt
         files = [f for f in os.listdir(self.dict_dir) if f.endswith('.txt')]
         self.dict_order = sorted(files)
         for f in self.dict_order:
             self.listbox.insert(tk.END, f)
-            self.dict_enabled[f] = tk.BooleanVar(value=True) 
+            # 優先從記憶中讀取，若無則預設為 False (或依需求改 True)
+            is_enabled = self.saved_prefs.get(f, False)
+            self.dict_enabled[f] = tk.BooleanVar(value=is_enabled) 
+            
             with open(os.path.join(self.dict_dir, f), 'r', encoding='utf-8') as obj:
                 self.dict_contents[f] = obj.read()
+        
         for f in self.dict_order:
             tk.Checkbutton(self.scroll_frame, text=f, variable=self.dict_enabled[f]).pack(anchor="w")
 
@@ -104,30 +135,29 @@ class MultiDictManager:
         if idx and idx[0] > 0:
             i = idx[0]
             self.dict_order[i], self.dict_order[i-1] = self.dict_order[i-1], self.dict_order[i]
-            val = self.listbox.get(i)
-            self.listbox.delete(i); self.listbox.insert(i-1, val); self.listbox.select_set(i-1)
+            val = self.listbox.get(i); self.listbox.delete(i); self.listbox.insert(i-1, val); self.listbox.select_set(i-1)
     def move_down(self):
         idx = self.listbox.curselection()
         if idx and idx[0] < self.listbox.size() - 1:
             i = idx[0]
             self.dict_order[i], self.dict_order[i+1] = self.dict_order[i+1], self.dict_order[i]
-            val = self.listbox.get(i)
-            self.listbox.delete(i); self.listbox.insert(i+1, val); self.listbox.select_set(i+1)
+            val = self.listbox.get(i); self.listbox.delete(i); self.listbox.insert(i+1, val); self.listbox.select_set(i+1)
+
     def on_run(self):
         self.save_current_edit()
+        self.save_prefs()  # 關鍵：關閉前存下勾選狀態
         for f, content in self.dict_contents.items():
             with open(os.path.join(self.dict_dir, f), 'w', encoding='utf-8') as obj:
                 obj.write(content.strip())
         self.success = True
         self.root.destroy()
+
     def show(self):
         self.root.mainloop()
         return self.success
 
 def run(bc):
-    plugin_dir = os.path.dirname(os.path.realpath(__file__))
-    dict_dir = os.path.join(plugin_dir, "dictionary")
-    gui = MultiDictManager(dict_dir)
+    gui = MultiDictManager(DICT_DIR)
     if not gui.show(): return 0
 
     cc = OpenCC('s2twp')
