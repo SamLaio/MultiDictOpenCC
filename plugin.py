@@ -1,17 +1,21 @@
 import os
 import sys
-import json  # 用於儲存勾選狀態
+import json
+import shutil # 用於複製檔案
 import tkinter as tk
-from tkinter import messagebox, scrolledtext
+from tkinter import messagebox, scrolledtext, filedialog # 加入 filedialog
 
 # --- 核心：環境獨立化路徑設定 ---
 plugin_dir = os.path.dirname(os.path.realpath(__file__))
 if plugin_dir not in sys.path:
     sys.path.insert(0, plugin_dir)
 
-# 設定檔與字典路徑
 CONFIG_FILE = os.path.join(plugin_dir, "config.json")
 DICT_DIR = os.path.join(plugin_dir, "dictionary")
+
+# 確保 dictionary 目錄存在
+if not os.path.exists(DICT_DIR):
+    os.makedirs(DICT_DIR)
 
 try:
     from bs4 import BeautifulSoup
@@ -23,7 +27,7 @@ except ImportError:
 class MultiDictManager:
     def __init__(self, dict_dir):
         self.root = tk.Tk()
-        self.root.title("MultiDictOpenCC")
+        self.root.title("MultiDictOpenCC 獨立運行版")
         self.root.geometry("850x750") 
         
         self.dict_dir = dict_dir
@@ -33,43 +37,42 @@ class MultiDictManager:
         self.current_file = None
         self.success = False
 
-        # 讀取上次儲存的勾選狀態
         self.saved_prefs = self.load_prefs()
 
         # --- 左側：控制區 ---
-        left_frame = tk.LabelFrame(self.root, text="字典管理與排序")
+        left_frame = tk.LabelFrame(self.root, text="1. 字典管理與排序")
         left_frame.pack(side="left", fill="y", padx=10, pady=5)
 
+        # 檔案清單
         self.listbox = tk.Listbox(left_frame, width=35, height=10, selectbackground="#0078d7")
         self.listbox.pack(padx=5, pady=5)
         self.listbox.bind('<<ListboxSelect>>', self.on_select_file)
 
-        btn_sort_frame = tk.Frame(left_frame)
-        btn_sort_frame.pack(fill="x", padx=5)
-        tk.Button(btn_sort_frame, text="▲ 上移", command=self.move_up).pack(side="left", expand=True, fill="x")
-        tk.Button(btn_sort_frame, text="▼ 下移", command=self.move_down).pack(side="left", expand=True, fill="x")
+        # 功能按鈕區 (新增、上移、下移)
+        btn_tool_frame = tk.Frame(left_frame)
+        btn_tool_frame.pack(fill="x", padx=5)
+        
+        # 新增字典按鈕
+        tk.Button(btn_tool_frame, text="➕ 新增字典", command=self.add_new_dict, bg="#e1f5fe").pack(side="left", expand=True, fill="x")
+        tk.Button(btn_tool_frame, text="▲ 上移", command=self.move_up).pack(side="left", expand=True, fill="x")
+        tk.Button(btn_tool_frame, text="▼ 下移", command=self.move_down).pack(side="left", expand=True, fill="x")
 
+        # 選取按鈕
         btn_sel_frame = tk.Frame(left_frame)
         btn_sel_frame.pack(fill="x", padx=5, pady=5)
         tk.Button(btn_sel_frame, text="☑ 全選", command=self.select_all).pack(side="left", expand=True, fill="x")
         tk.Button(btn_sel_frame, text="☐ 全不選", command=self.deselect_all).pack(side="left", expand=True, fill="x")
 
+        # 執行按鈕
         self.btn_run = tk.Button(left_frame, text="★ 執行轉換 ★", 
                                  command=self.on_run, bg="#28a745", fg="white", 
                                  font=("Arial", 12, "bold"), pady=10)
         self.btn_run.pack(fill="x", padx=5, pady=10)
 
-        # 帶捲軸的勾選清單
-        canvas_frame = tk.Frame(left_frame)
-        canvas_frame.pack(fill="both", expand=True)
-        self.canvas = tk.Canvas(canvas_frame, width=220)
-        self.scrollbar = tk.Scrollbar(canvas_frame, orient="vertical", command=self.canvas.yview)
-        self.scroll_frame = tk.Frame(self.canvas)
-        self.scroll_frame.bind("<Configure>", lambda e: self.canvas.configure(scrollregion=self.canvas.bbox("all")))
-        self.canvas.create_window((0, 0), window=self.scroll_frame, anchor="nw")
-        self.canvas.configure(yscrollcommand=self.scrollbar.set)
-        self.canvas.pack(side="left", fill="both", expand=True)
-        self.scrollbar.pack(side="right", fill="y")
+        # 勾選清單容器 (為了動態更新，我們把勾選清單放到一個專門的 frame)
+        self.check_container = tk.Frame(left_frame)
+        self.check_container.pack(fill="both", expand=True)
+        self.init_check_list()
 
         self.refresh_file_list()
 
@@ -81,8 +84,43 @@ class MultiDictManager:
         self.text_area = scrolledtext.ScrolledText(right_frame, height=40)
         self.text_area.pack(fill="both", expand=True, pady=5)
 
+    def init_check_list(self):
+        """初始化或重置勾選清單的 Canvas"""
+        if hasattr(self, 'canvas'):
+            self.canvas.destroy()
+            self.scrollbar.destroy()
+        
+        self.canvas = tk.Canvas(self.check_container, width=220)
+        self.scrollbar = tk.Scrollbar(self.check_container, orient="vertical", command=self.canvas.yview)
+        self.scroll_frame = tk.Frame(self.canvas)
+        self.scroll_frame.bind("<Configure>", lambda e: self.canvas.configure(scrollregion=self.canvas.bbox("all")))
+        self.canvas.create_window((0, 0), window=self.scroll_frame, anchor="nw")
+        self.canvas.configure(yscrollcommand=self.scrollbar.set)
+        self.canvas.pack(side="left", fill="both", expand=True)
+        self.scrollbar.pack(side="right", fill="y")
+
+    def add_new_dict(self):
+        """從電腦選取檔案並加入外掛字典庫"""
+        file_path = filedialog.askopenfilename(title="選擇字典檔", filetypes=[("Text files", "*.txt")])
+        if file_path:
+            file_name = os.path.basename(file_path)
+            dest_path = os.path.join(self.dict_dir, file_name)
+            
+            if os.path.exists(dest_path):
+                if not messagebox.askyesno("提示", "檔案已存在，是否覆蓋？"):
+                    return
+            
+            try:
+                shutil.copy(file_path, dest_path)
+                # 重新讀取清單
+                self.listbox.delete(0, tk.END)
+                self.init_check_list()
+                self.refresh_file_list()
+                messagebox.showinfo("成功", "字典已加入：" + file_name)
+            except Exception as e:
+                messagebox.showerror("錯誤", "無法加入檔案：" + str(e))
+
     def load_prefs(self):
-        """讀取 config.json 中的勾選紀錄"""
         if os.path.exists(CONFIG_FILE):
             try:
                 with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
@@ -92,7 +130,6 @@ class MultiDictManager:
         return {}
 
     def save_prefs(self):
-        """將當前勾選狀態存入 config.json"""
         prefs = {f: var.get() for f, var in self.dict_enabled.items()}
         try:
             with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
@@ -105,9 +142,9 @@ class MultiDictManager:
         self.dict_order = sorted(files)
         for f in self.dict_order:
             self.listbox.insert(tk.END, f)
-            # 優先從記憶中讀取，若無則預設為 False (或依需求改 True)
-            is_enabled = self.saved_prefs.get(f, False)
-            self.dict_enabled[f] = tk.BooleanVar(value=is_enabled) 
+            if f not in self.dict_enabled: # 避免重新整理時覆蓋現有 BooleanVar
+                is_enabled = self.saved_prefs.get(f, False)
+                self.dict_enabled[f] = tk.BooleanVar(value=is_enabled) 
             
             with open(os.path.join(self.dict_dir, f), 'r', encoding='utf-8') as obj:
                 self.dict_contents[f] = obj.read()
@@ -145,7 +182,7 @@ class MultiDictManager:
 
     def on_run(self):
         self.save_current_edit()
-        self.save_prefs()  # 關鍵：關閉前存下勾選狀態
+        self.save_prefs()
         for f, content in self.dict_contents.items():
             with open(os.path.join(self.dict_dir, f), 'w', encoding='utf-8') as obj:
                 obj.write(content.strip())
