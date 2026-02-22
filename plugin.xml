@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<plugin>
+  <name>MultiDictOpenCC</name>
+  <type>edit</type>
+  <description>進階管理 (多選/排序/編輯/圖示化)</description>
+  <version>4.5</version>
+  <author>Sam</author>
+  <engine>python3.4</engine>
+  <icon>plugin.png</icon>
+</plugin>
