@@ -4,6 +4,7 @@ import json
 import shutil
 import re
 import tkinter as tk
+import traceback
 from tkinter import messagebox, scrolledtext, filedialog
 
 # --- 基礎環境設定 ---
@@ -27,6 +28,8 @@ except ImportError:
 class UltraConverter:
     def __init__(self, final_dict, mode='s2twp'):
         self.cc = OpenCC(mode)
+        # 保護完整的 style/script 區塊
+        self.block_re = re.compile(r'<(script|style)[^>]*>.*?</\1>', re.IGNORECASE | re.DOTALL)
         self.tag_re = re.compile(r'(<[^>]+>|&[a-zA-Z#0-9]+;)')
         self.place_re = re.compile(r'\uE000(\d+)\uE001')
         self.char_map = str.maketrans({'“': '「', '”': '」', '‘': '『', '’': '』'})
@@ -46,7 +49,11 @@ class UltraConverter:
         def protect(m):
             tag_storage.append(m.group(0))
             return f"\uE000{len(tag_storage)-1}\uE001"
-        protected = self.tag_re.sub(protect, data)
+            
+        # 1. 先保護 script 與 style 區塊，避免裡面的 JS/CSS 被轉換
+        protected = self.block_re.sub(protect, data)
+        # 2. 再保護一般 HTML 標籤與實體字元
+        protected = self.tag_re.sub(protect, protected)
         
         text = self.cc.convert(protected)
         text = text.translate(self.char_map)
@@ -84,31 +91,41 @@ class UltraConverter:
                 i += 1
         return "".join(res)
 
-# --- GUI 字典管理類別 (已補上存檔與自動存檔功能) ---
+# --- GUI 字典管理類別 ---
 class MultiDictManager:
     def __init__(self, dict_dir):
         self.root = tk.Tk()
         self.root.title("MultiDictOpenCC")
         self.root.geometry("850x750")
-        self.dict_dir, self.dict_contents, self.dict_order, self.dict_enabled = dict_dir, {}, [], {}
-        self.current_file, self.success = None, False
+        self.dict_dir = dict_dir
+        self.dict_contents = {}  # 延遲載入：初始為空
+        self.dict_order = []
+        self.dict_enabled = {}
+        self.current_file = None
+        self.success = False
         self.saved_prefs = self.load_prefs()
         self.setup_gui()
 
     def load_prefs(self):
         if os.path.exists(CONFIG_FILE):
             try:
-                with open(CONFIG_FILE, 'r', encoding='utf-8') as f: return json.load(f)
-            except: return {}
+                with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
+                    return json.load(f)
+            except Exception:
+                return {}
         return {}
 
     def setup_gui(self):
         # 左側面板
-        left = tk.LabelFrame(self.root, text="1. 字典管理"); left.pack(side="left", fill="y", padx=10, pady=5)
-        self.listbox = tk.Listbox(left, width=35, height=10); self.listbox.pack(padx=5, pady=5)
+        left = tk.LabelFrame(self.root, text="1. 字典管理")
+        left.pack(side="left", fill="y", padx=10, pady=5)
+        
+        self.listbox = tk.Listbox(left, width=35, height=10)
+        self.listbox.pack(padx=5, pady=5)
         self.listbox.bind('<<ListboxSelect>>', self.on_select_file)
         
-        f1 = tk.Frame(left); f1.pack(fill="x")
+        f1 = tk.Frame(left)
+        f1.pack(fill="x")
         tk.Button(f1, text="➕ 新增", command=self.add_new_dict).pack(side="left", expand=True, fill="x")
         tk.Button(f1, text="▲", command=self.move_up).pack(side="left", expand=True, fill="x")
         tk.Button(f1, text="▼", command=self.move_down).pack(side="left", expand=True, fill="x")
@@ -116,15 +133,19 @@ class MultiDictManager:
         self.btn_run = tk.Button(left, text="★ 執行 ★", command=self.on_run, bg="#0078d7", fg="white", font=("Arial", 12, "bold"), pady=10)
         self.btn_run.pack(fill="x", padx=5, pady=10)
         
-        self.check_container = tk.Frame(left); self.check_container.pack(fill="both", expand=True)
+        self.check_container = tk.Frame(left)
+        self.check_container.pack(fill="both", expand=True)
         self.init_check_list()
         self.refresh_file_list()
         
         # 右側面板
-        right = tk.Frame(self.root); right.pack(side="right", fill="both", expand=True, padx=10, pady=5)
+        right = tk.Frame(self.root)
+        right.pack(side="right", fill="both", expand=True, padx=10, pady=5)
         
         # 右側頂部控制列
-        top_ctrl = tk.Frame(right); top_ctrl.pack(fill="x", pady=2)
+        top_ctrl = tk.Frame(right)
+        top_ctrl.pack(fill="x", pady=2)
+        
         self.lbl_editing = tk.Label(top_ctrl, text="請選擇左側字典進行編輯...", fg="blue", font=("Arial", 10, "bold"))
         self.lbl_editing.pack(side="left")
         
@@ -132,12 +153,19 @@ class MultiDictManager:
         self.btn_save_dict = tk.Button(top_ctrl, text="💾 儲存當前字典修改", command=self.manual_save_dict, bg="#ffc107")
         self.btn_save_dict.pack(side="right")
 
-        self.text_area = scrolledtext.ScrolledText(right, height=40); self.text_area.pack(fill="both", expand=True)
+        self.text_area = scrolledtext.ScrolledText(right, height=40)
+        self.text_area.pack(fill="both", expand=True)
 
     def init_check_list(self):
-        self.canvas = tk.Canvas(self.check_container, width=220); self.scrollbar = tk.Scrollbar(self.check_container, command=self.canvas.yview)
-        self.scroll_frame = tk.Frame(self.canvas); self.canvas.create_window((0,0), window=self.scroll_frame, anchor="nw")
-        self.canvas.configure(yscrollcommand=self.scrollbar.set); self.canvas.pack(side="left", fill="both", expand=True); self.scrollbar.pack(side="right", fill="y")
+        self.canvas = tk.Canvas(self.check_container, width=220)
+        self.scrollbar = tk.Scrollbar(self.check_container, command=self.canvas.yview)
+        self.scroll_frame = tk.Frame(self.canvas)
+        
+        self.canvas.create_window((0,0), window=self.scroll_frame, anchor="nw")
+        self.canvas.configure(yscrollcommand=self.scrollbar.set)
+        
+        self.canvas.pack(side="left", fill="both", expand=True)
+        self.scrollbar.pack(side="right", fill="y")
         self.scroll_frame.bind("<Configure>", lambda e: self.canvas.configure(scrollregion=self.canvas.bbox("all")))
 
     def refresh_file_list(self):
@@ -150,13 +178,22 @@ class MultiDictManager:
         self.dict_order = files
         for f in files:
             self.listbox.insert(tk.END, f)
-            if f not in self.dict_enabled: self.dict_enabled[f] = tk.BooleanVar(value=self.saved_prefs.get(f, False))
+            if f not in self.dict_enabled:
+                self.dict_enabled[f] = tk.BooleanVar(value=self.saved_prefs.get(f, False))
             
-            # 讀取檔案
-            with open(os.path.join(self.dict_dir, f), 'r', encoding='utf-8') as obj: 
-                self.dict_contents[f] = obj.read()
-            
+            # 延遲載入優化：此處不讀取檔案內容
             tk.Checkbutton(self.scroll_frame, text=f, variable=self.dict_enabled[f]).pack(anchor="w")
+
+    def _ensure_file_loaded(self, file_name):
+        """輔助方法：確保特定字典檔的內容已被載入記憶體"""
+        if file_name not in self.dict_contents:
+            file_path = os.path.join(self.dict_dir, file_name)
+            try:
+                with open(file_path, 'r', encoding='utf-8') as obj:
+                    self.dict_contents[file_name] = obj.read()
+            except Exception as e:
+                print(f"讀取字典檔 {file_name} 失敗: {e}")
+                self.dict_contents[file_name] = ""
 
     def on_select_file(self, e):
         self.auto_save_current_edit() # 切換前，先把舊的暫存
@@ -164,6 +201,10 @@ class MultiDictManager:
         if sel:
             self.current_file = self.listbox.get(sel[0])
             self.lbl_editing.config(text=f"正在編輯: {self.current_file}")
+            
+            # 點擊時才真正載入檔案內容
+            self._ensure_file_loaded(self.current_file)
+            
             self.text_area.delete("1.0", tk.END)
             self.text_area.insert(tk.END, self.dict_contents[self.current_file])
 
@@ -199,26 +240,40 @@ class MultiDictManager:
     def move_up(self):
         i = self.listbox.curselection()
         if i and i[0] > 0:
-            idx = i[0]; self.dict_order[idx], self.dict_order[idx-1] = self.dict_order[idx-1], self.dict_order[idx]
-            v = self.listbox.get(idx); self.listbox.delete(idx); self.listbox.insert(idx-1, v); self.listbox.select_set(idx-1)
+            idx = i[0]
+            self.dict_order[idx], self.dict_order[idx-1] = self.dict_order[idx-1], self.dict_order[idx]
+            v = self.listbox.get(idx)
+            self.listbox.delete(idx)
+            self.listbox.insert(idx-1, v)
+            self.listbox.select_set(idx-1)
 
     def move_down(self):
         i = self.listbox.curselection()
         if i and i[0] < self.listbox.size()-1:
-            idx = i[0]; self.dict_order[idx], self.dict_order[idx+1] = self.dict_order[idx+1], self.dict_order[idx]
-            v = self.listbox.get(idx); self.listbox.delete(idx); self.listbox.insert(idx+1, v); self.listbox.select_set(idx+1)
+            idx = i[0]
+            self.dict_order[idx], self.dict_order[idx+1] = self.dict_order[idx+1], self.dict_order[idx]
+            v = self.listbox.get(idx)
+            self.listbox.delete(idx)
+            self.listbox.insert(idx+1, v)
+            self.listbox.select_set(idx+1)
 
     def on_run(self):
         self.auto_save_current_edit()
         
-        # 1. 儲存勾選勾選偏好 (config.json)
-        with open(CONFIG_FILE, 'w', encoding='utf-8') as f: 
-            json.dump({f: v.get() for f, v in self.dict_enabled.items()}, f, ensure_ascii=False, indent=4)
+        # 1. 儲存勾選偏好 (config.json)
+        try:
+            with open(CONFIG_FILE, 'w', encoding='utf-8') as f: 
+                json.dump({f: v.get() for f, v in self.dict_enabled.items()}, f, ensure_ascii=False, indent=4)
+        except Exception as e:
+            print(f"儲存設定檔失敗: {e}")
         
-        # 2. 一次性把所有記憶體修改持久寫入到實體檔案中 (全自動存檔)
+        # 2. 一次性把所有記憶體中「有修改過/載入過」的持久寫入到實體檔案中 (全自動存檔)
         for f, c in self.dict_contents.items():
-            with open(os.path.join(self.dict_dir, f), 'w', encoding='utf-8') as obj: 
-                obj.write(c.strip())
+            try:
+                with open(os.path.join(self.dict_dir, f), 'w', encoding='utf-8') as obj: 
+                    obj.write(c.strip())
+            except Exception as e:
+                print(f"自動存檔 {f} 失敗: {e}")
                 
         self.success = True
         self.root.destroy()
@@ -230,20 +285,37 @@ class MultiDictManager:
 # --- Sigil 進入點 ---
 def run(bc):
     gui = MultiDictManager(DICT_DIR)
-    if not gui.show(): return 0
+    if not gui.show(): 
+        return 0
     
+    print("MultiDictOpenCC: 開始處理電子書...")
     cc_main = OpenCC('s2twp')
     final_dict = {}
+    
+    # 建立最終字典
     for f_name in gui.dict_order:
         if gui.dict_enabled[f_name].get():
+            # 若使用者執行前未點擊過該檔案，需在此處載入
+            gui._ensure_file_loaded(f_name)
+            
+            line_count = 0
             for line in gui.dict_contents[f_name].splitlines():
-                parts = line.strip().split('\t')
+                line_count += 1
+                stripped_line = line.strip()
+                if not stripped_line:
+                    continue
+                    
+                parts = stripped_line.split('\t')
                 if len(parts) >= 2:
                     k = cc_main.convert(parts[0])
                     final_dict[k] = parts[1].split()[0]
+                else:
+                    # 防呆驗證：有內容卻沒有 Tab 分隔
+                    print(f"⚠️ 警告：字典檔 [{f_name}] 第 {line_count} 行格式錯誤，缺少 Tab 分隔符號 -> '{line}'，已略過。")
     
     processor = UltraConverter(final_dict, 's2twp')
 
+    # 處理電子書內容
     for entry in bc.manifest_iter():
         fid, href, mtype = entry[0], entry[1], entry[2]
         mtype_l = mtype.lower()
@@ -252,6 +324,9 @@ def run(bc):
                 raw = bc.readfile(fid)
                 if raw:
                     bc.writefile(fid, processor.process(raw))
-            except: continue
+            except Exception as e:
+                print(f"❌ 錯誤：處理檔案 {fid} ({href}) 時發生例外！")
+                traceback.print_exc()
 
+    print("MultiDictOpenCC: 處理完成！")
     return 0
